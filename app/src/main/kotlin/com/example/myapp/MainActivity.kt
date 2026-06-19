@@ -25,7 +25,10 @@ class MainActivity : Activity() {
     private var reader: BufferedReader? = null
     private var connected = false
     private val handler = Handler(Looper.getMainLooper())
-
+	
+	private val commandHistory = mutableListOf<String>()
+	private var historyIndex = -1
+	
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -88,6 +91,35 @@ class MainActivity : Activity() {
             imeOptions = EditorInfo.IME_ACTION_SEND
             setRawInputType(android.text.InputType.TYPE_CLASS_TEXT)
         }
+		
+		val historyPanel = LinearLayout(this).apply {
+			orientation = LinearLayout.HORIZONTAL
+		}
+
+		val btnPrev = Button(this).apply {
+			text = "▲"
+			setOnClickListener {
+				if (commandHistory.isNotEmpty() && historyIndex > 0) {
+					historyIndex--
+					cmdInput.setText(commandHistory[historyIndex])
+					cmdInput.setSelection(cmdInput.text.length) // Курсор в конец
+				}
+			}
+		}
+
+		val btnNext = Button(this).apply {
+			text = "▼"
+			setOnClickListener {
+				if (historyIndex < commandHistory.size - 1) {
+					historyIndex++
+					cmdInput.setText(commandHistory[historyIndex])
+				} else {
+					historyIndex = commandHistory.size
+					cmdInput.text.clear()
+				}
+				cmdInput.setSelection(cmdInput.text.length)
+			}
+		}
 
         layout.addView(headerTitle)
         layout.addView(pathText)
@@ -95,8 +127,11 @@ class MainActivity : Activity() {
         layout.addView(connectBtn)
         layout.addView(scrollView)
         layout.addView(cmdInput)
-        
+        layout.addView(historyPanel)
+		
         setContentView(layout)
+		historyPanel.addView(btnPrev)
+		historyPanel.addView(btnNext)
 
         connectBtn.setOnClickListener { if (!connected) connect() else disconnect() }
 
@@ -112,7 +147,15 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun handleCommand(cmd: String) {
+	private fun handleCommand(cmd: String) {
+        if (cmd.isNotEmpty()) {
+            // Добавляем в историю, если такой команды там еще нет
+            if (commandHistory.isEmpty() || commandHistory.last() != cmd) {
+                commandHistory.add(cmd)
+            }
+            historyIndex = commandHistory.size // Сбрасываем индекс в конец
+        }
+        
         when (cmd.lowercase()) {
             "cls" -> outputText.text = ""
             "exit" -> disconnect()
