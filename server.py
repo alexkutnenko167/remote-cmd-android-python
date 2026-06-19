@@ -1,18 +1,18 @@
 import socket
-import subprocess
+import threading
 import os
+import subprocess
 
 HOST = '0.0.0.0'
 PORT = 7777
+DISCOVERY_PORT = 7778
 
 # Начальная директория
 current_dir = os.path.expanduser("~")
 
 def get_local_ip():
-    """Функция для автоматического определения IP-адреса компьютера в локальной сети"""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        # Не обязательно, чтобы этот адрес был доступен, сокет просто выберет нужный интерфейс
         s.connect(('8.8.8.8', 1))
         ip = s.getsockname()[0]
     except Exception:
@@ -21,10 +21,27 @@ def get_local_ip():
         s.close()
     return ip
 
+def discovery_worker():
+    """Отвечает на UDP-запросы телефона для автопоиска"""
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        udp.bind(('', DISCOVERY_PORT))
+    except Exception as e:
+        print(f"[!] Ошибка UDP: {e}")
+        return
+
+    while True:
+        try:
+            data, addr = udp.recvfrom(1024)
+            if data == b"WHERE_IS_REMOTE_CMD?":
+                # Отправляем подтверждение, что мы — сервер
+                udp.sendto(b"I_AM_REMOTE_CMD_SERVER", addr)
+        except:
+            continue
+
 def execute_command(cmd):
     global current_dir
-    
-    # Логика смены директории
     if cmd.lower().startswith("cd "):
         new_path = cmd[3:].strip().strip('"')
         potential_path = os.path.abspath(os.path.join(current_dir, new_path))
@@ -34,21 +51,7 @@ def execute_command(cmd):
         else:
             return f"Ошибка: папка не найдена: {new_path}"
 
-    # Команда для файлового менеджера (на будущее)
-    if cmd == "__list__":
-        try:
-            items = os.listdir(current_dir)
-            res = []
-            for item in items:
-                p = "DIR" if os.path.isdir(os.path.join(current_dir, item)) else "FILE"
-                res.append(f"{p}|{item}")
-            return "\n".join(res)
-        except Exception as e:
-            return str(e)
-
-    # Обычные системные команды
     try:
-        # /c - выполнить и закрыть, /d - менять диск при cd
         full_cmd = f'cd /d "{current_dir}" && {cmd}'
         result = subprocess.run(
             full_cmd, shell=True, capture_output=True, text=True, encoding='cp866', errors='replace'
@@ -58,52 +61,35 @@ def execute_command(cmd):
         return f"Ошибка сервера: {str(e)}"
 
 def start_server():
+    # Запускаем автопоиск в отдельном потоке
+    threading.Thread(target=discovery_worker, daemon=True).start()
+
     my_ip = get_local_ip()
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
-    try:
-        server.bind((HOST, PORT))
-    except Exception as e:
-        print(f"[!] Не удалось запустить сервер: {e}")
-        return
-
+    server.bind((HOST, PORT))
     server.listen(1)
     
-    print("="*40)
-    print(f"СТАТУС: Сервер запущен!")
-    print(f"IP АДРЕС: {my_ip}")
-    print(f"ПОРТ: {PORT}")
-    print(f"ПАПКА: {current_dir}")
-    print("="*40)
-    print("Ожидание подключения телефона...")
+    print(f"[*] Сервер запущен на {my_ip}:{PORT}")
+    print("[*] Автопоиск активен на порту 7778")
 
     while True:
         conn, addr = server.accept()
-        print(f"[+] Подключен телефон: {addr[0]}")
         try:
             while True:
                 data = conn.recv(16384)
                 if not data: break
-                
                 command = data.decode('utf-8').strip()
-                if not command: # Пустая команда (например, при коннекте)
-                    response = ""
-                elif command.lower() == 'exit':
-                    break
-                else:
-                    print(f"[CMD]: {command}")
-                    response = execute_command(command)
+                if not command: response = ""
+                elif command.lower() == 'exit': break
+                else: response = execute_command(command)
                 
-                # Формируем ответ с путем и маркером конца
                 full_response = f"{response}\n\n[PATH]{current_dir}\nEND_OF_OUTPUT\n"
                 conn.sendall(full_response.encode('utf-8', errors='ignore'))
-                
-        except Exception as e:
-            print(f"[!] Разрыв связи: {e}")
+        except:
+            pass
         finally:
             conn.close()
-            print(f"[-] Телефон отключен")
 
 if __name__ == "__main__":
     start_server()

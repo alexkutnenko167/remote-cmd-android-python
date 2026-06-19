@@ -1,7 +1,7 @@
 package com.example.myapp
 
 import android.app.Activity
-import android.content.Context // Добавили для SharedPreferences
+import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -10,6 +10,9 @@ import android.os.Looper
 import android.view.inputmethod.EditorInfo
 import android.widget.*
 import java.io.*
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.Socket
 
 class MainActivity : Activity() {
@@ -25,10 +28,10 @@ class MainActivity : Activity() {
     private var reader: BufferedReader? = null
     private var connected = false
     private val handler = Handler(Looper.getMainLooper())
-	
+    
     private val commandHistory = mutableListOf<String>()
     private var historyIndex = -1
-	
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -57,12 +60,12 @@ class MainActivity : Activity() {
             setPadding(0, 5, 0, 20)
         }
 
-        // --- 1. ЗАГРУЗКА СОХРАНЕННОГО IP ---
+        // Загрузка последнего IP
         val prefs = getSharedPreferences("RemoteCMD_Prefs", Context.MODE_PRIVATE)
-        val savedIp = prefs.getString("last_ip", "192.168.1.81") // По умолчанию, если ничего не сохранено
+        val savedIp = prefs.getString("last_ip", "192.168.1.81")
 
         ipInput = EditText(this).apply {
-            setText(savedIp) // Устанавливаем сохраненный IP
+            setText(savedIp)
             setTextColor(Color.WHITE)
             hint = "IP сервера"
             setHintTextColor(Color.DKGRAY)
@@ -74,14 +77,11 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE)
         }
 
-        // --- 2. ВОЗМОЖНОСТЬ ВЫДЕЛЕНИЯ ТЕКСТА ---
         outputText = TextView(this).apply {
             setTextColor(Color.parseColor("#00FF00"))
             typeface = Typeface.MONOSPACE
             textSize = 13f
-            setTextIsSelectable(true) // Включаем выделение и копирование!
-            setFocusable(true)
-            setFocusableInTouchMode(true)
+            setTextIsSelectable(true)
         }
 
         scrollView = ScrollView(this).apply {
@@ -97,7 +97,7 @@ class MainActivity : Activity() {
             imeOptions = EditorInfo.IME_ACTION_SEND
             setRawInputType(android.text.InputType.TYPE_CLASS_TEXT)
         }
-		
+
         val historyPanel = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER
@@ -128,40 +128,59 @@ class MainActivity : Activity() {
             }
         }
 
-        layout.addView(headerTitle)
-        layout.addView(pathText)
-        layout.addView(ipInput)
-        layout.addView(connectBtn)
-        layout.addView(scrollView)
-        layout.addView(cmdInput)
+        layout.addView(headerTitle); layout.addView(pathText)
+        layout.addView(ipInput); layout.addView(connectBtn)
+        layout.addView(scrollView); layout.addView(cmdInput)
         layout.addView(historyPanel)
-		
+        historyPanel.addView(btnPrev); historyPanel.addView(btnNext)
         setContentView(layout)
-        historyPanel.addView(btnPrev)
-        historyPanel.addView(btnNext)
 
         connectBtn.setOnClickListener { if (!connected) connect() else disconnect() }
-
+        
         cmdInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) {
                 val cmd = cmdInput.text.toString().trim()
-                if (cmd.isNotEmpty()) {
-                    handleCommand(cmd)
-                    cmdInput.text.clear()
-                }
+                if (cmd.isNotEmpty()) { handleCommand(cmd); cmdInput.text.clear() }
                 true
             } else false
         }
+
+        // ЗАПУСК АВТОПОИСКА ПРИ ОТКРЫТИИ
+        startAutoDiscovery()
+    }
+
+    private fun startAutoDiscovery() {
+        Thread {
+            try {
+                val udpSocket = DatagramSocket()
+                udpSocket.broadcast = true
+                udpSocket.soTimeout = 2000
+                val msg = "WHERE_IS_REMOTE_CMD?".toByteArray()
+                val packet = DatagramPacket(msg, msg.size, InetAddress.getByName("255.255.255.255"), 7778)
+                udpSocket.send(packet)
+
+                val buf = ByteArray(1024)
+                val receivePacket = DatagramPacket(buf, buf.size)
+                udpSocket.receive(receivePacket)
+
+                val response = String(receivePacket.data, 0, receivePacket.length)
+                if (response == "I_AM_REMOTE_CMD_SERVER") {
+                    val serverIp = receivePacket.address.hostAddress
+                    handler.post {
+                        ipInput.setText(serverIp)
+                        Toast.makeText(this, "Сервер найден: $serverIp", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                udpSocket.close()
+            } catch (e: Exception) {}
+        }.start()
     }
 
     private fun handleCommand(cmd: String) {
         if (cmd.isNotEmpty()) {
-            if (commandHistory.isEmpty() || commandHistory.last() != cmd) {
-                commandHistory.add(cmd)
-            }
+            if (commandHistory.isEmpty() || commandHistory.last() != cmd) commandHistory.add(cmd)
             historyIndex = commandHistory.size
         }
-        
         when (cmd.lowercase()) {
             "cls" -> outputText.text = ""
             "exit" -> disconnect()
@@ -177,22 +196,13 @@ class MainActivity : Activity() {
                 writer = socket!!.getOutputStream().bufferedWriter()
                 reader = socket!!.getInputStream().bufferedReader()
                 connected = true
-
-                // --- СОХРАНЕНИЕ IP ПРИ УСПЕШНОМ ПОДКЛЮЧЕНИИ ---
-                val prefs = getSharedPreferences("RemoteCMD_Prefs", Context.MODE_PRIVATE)
-                prefs.edit().putString("last_ip", ip).apply()
-
+                getSharedPreferences("RemoteCMD_Prefs", Context.MODE_PRIVATE).edit().putString("last_ip", ip).apply()
                 handler.post {
-                    connectBtn.text = "ОТКЛЮЧИТЬСЯ"
-                    connectBtn.setBackgroundColor(Color.parseColor("#880000"))
-                    cmdInput.isEnabled = true
-                    ipInput.isEnabled = false
-                    showLog("✅ Соединение установлено\n")
-                    sendToServer("") 
+                    connectBtn.text = "ОТКЛЮЧИТЬСЯ"; connectBtn.setBackgroundColor(Color.parseColor("#880000"))
+                    cmdInput.isEnabled = true; ipInput.isEnabled = false
+                    showLog("✅ Подключено\n"); sendToServer("")
                 }
-            } catch (e: Exception) {
-                handler.post { showLog("❌ Ошибка: ${e.message}\n") }
-            }
+            } catch (e: Exception) { handler.post { showLog("❌ Ошибка: ${e.message}\n") } }
         }.start()
     }
 
@@ -201,12 +211,9 @@ class MainActivity : Activity() {
             try { writer?.write("exit\n"); writer?.flush(); socket?.close() } catch (e: Exception) {}
             connected = false
             handler.post {
-                connectBtn.text = "ПОДКЛЮЧИТЬСЯ"
-                connectBtn.setBackgroundColor(Color.parseColor("#222222"))
-                cmdInput.isEnabled = false
-                ipInput.isEnabled = true
-                pathText.text = "Путь: ---"
-                showLog("🔌 Сеанс завершен\n")
+                connectBtn.text = "ПОДКЛЮЧИТЬСЯ"; connectBtn.setBackgroundColor(Color.parseColor("#222222"))
+                cmdInput.isEnabled = false; ipInput.isEnabled = true
+                pathText.text = "Путь: ---"; showLog("🔌 Отключено\n")
             }
         }.start()
     }
@@ -215,8 +222,7 @@ class MainActivity : Activity() {
         if (!connected) return
         Thread {
             try {
-                writer?.write(cmd + "\n")
-                writer?.flush()
+                writer?.write(cmd + "\n"); writer?.flush()
                 val response = StringBuilder()
                 var line: String?
                 while (true) {
@@ -225,23 +231,19 @@ class MainActivity : Activity() {
                     if (line.startsWith("[PATH]")) {
                         val path = line.replace("[PATH]", "")
                         handler.post { pathText.text = "Путь: $path" }
-                    } else {
-                        response.append(line).append("\n")
-                    }
+                    } else response.append(line).append("\n")
                 }
                 handler.post {
                     if (cmd.isNotEmpty()) outputText.append("\n> $cmd\n")
                     outputText.append(response.toString())
-                    scrollView.post { scrollView.fullScroll(ScrollView.FOCUS_DOWN) }
+                    scrollView.post { scrollView.fullScroll(android.widget.ScrollView.FOCUS_DOWN) }
                 }
-            } catch (e: Exception) {
-                handler.post { showLog("❌ Ошибка сети\n"); disconnect() }
-            }
+            } catch (e: Exception) { handler.post { showLog("❌ Ошибка сети\n"); disconnect() } }
         }.start()
     }
 
     private fun showLog(msg: String) {
         outputText.append(msg)
-        scrollView.post { scrollView.fullScroll(ScrollView.FOCUS_DOWN) }
+        scrollView.post { scrollView.fullScroll(android.widget.ScrollView.FOCUS_DOWN) }
     }
 }
