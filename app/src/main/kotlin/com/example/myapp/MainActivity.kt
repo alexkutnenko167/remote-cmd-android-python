@@ -1,6 +1,7 @@
 package com.example.myapp
 
 import android.app.Activity
+import android.content.Context // Добавили для SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -11,7 +12,6 @@ import android.widget.*
 import java.io.*
 import java.net.Socket
 
-// Наследуемся от Activity (так проще с темами)
 class MainActivity : Activity() {
     private lateinit var outputText: TextView
     private lateinit var cmdInput: EditText
@@ -26,17 +26,15 @@ class MainActivity : Activity() {
     private var connected = false
     private val handler = Handler(Looper.getMainLooper())
 	
-	private val commandHistory = mutableListOf<String>()
-	private var historyIndex = -1
+    private val commandHistory = mutableListOf<String>()
+    private var historyIndex = -1
 	
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // --- УБИРАЕМ БЕЛЫЕ ПОЛОСЫ (Для Xiaomi и др.) ---
         window.statusBarColor = Color.parseColor("#121212")
         window.navigationBarColor = Color.parseColor("#121212")
 
-        // Основной контейнер
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#121212"))
@@ -59,8 +57,12 @@ class MainActivity : Activity() {
             setPadding(0, 5, 0, 20)
         }
 
+        // --- 1. ЗАГРУЗКА СОХРАНЕННОГО IP ---
+        val prefs = getSharedPreferences("RemoteCMD_Prefs", Context.MODE_PRIVATE)
+        val savedIp = prefs.getString("last_ip", "192.168.1.81") // По умолчанию, если ничего не сохранено
+
         ipInput = EditText(this).apply {
-            setText("192.168.1.81")
+            setText(savedIp) // Устанавливаем сохраненный IP
             setTextColor(Color.WHITE)
             hint = "IP сервера"
             setHintTextColor(Color.DKGRAY)
@@ -72,10 +74,14 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE)
         }
 
+        // --- 2. ВОЗМОЖНОСТЬ ВЫДЕЛЕНИЯ ТЕКСТА ---
         outputText = TextView(this).apply {
             setTextColor(Color.parseColor("#00FF00"))
             typeface = Typeface.MONOSPACE
             textSize = 13f
+            setTextIsSelectable(true) // Включаем выделение и копирование!
+            setFocusable(true)
+            setFocusableInTouchMode(true)
         }
 
         scrollView = ScrollView(this).apply {
@@ -92,34 +98,35 @@ class MainActivity : Activity() {
             setRawInputType(android.text.InputType.TYPE_CLASS_TEXT)
         }
 		
-		val historyPanel = LinearLayout(this).apply {
-			orientation = LinearLayout.HORIZONTAL
-		}
+        val historyPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER
+        }
 
-		val btnPrev = Button(this).apply {
-			text = "▲"
-			setOnClickListener {
-				if (commandHistory.isNotEmpty() && historyIndex > 0) {
-					historyIndex--
-					cmdInput.setText(commandHistory[historyIndex])
-					cmdInput.setSelection(cmdInput.text.length) // Курсор в конец
-				}
-			}
-		}
+        val btnPrev = Button(this).apply {
+            text = "▲"
+            setOnClickListener {
+                if (commandHistory.isNotEmpty() && historyIndex > 0) {
+                    historyIndex--
+                    cmdInput.setText(commandHistory[historyIndex])
+                    cmdInput.setSelection(cmdInput.text.length)
+                }
+            }
+        }
 
-		val btnNext = Button(this).apply {
-			text = "▼"
-			setOnClickListener {
-				if (historyIndex < commandHistory.size - 1) {
-					historyIndex++
-					cmdInput.setText(commandHistory[historyIndex])
-				} else {
-					historyIndex = commandHistory.size
-					cmdInput.text.clear()
-				}
-				cmdInput.setSelection(cmdInput.text.length)
-			}
-		}
+        val btnNext = Button(this).apply {
+            text = "▼"
+            setOnClickListener {
+                if (historyIndex < commandHistory.size - 1) {
+                    historyIndex++
+                    cmdInput.setText(commandHistory[historyIndex])
+                } else {
+                    historyIndex = commandHistory.size
+                    cmdInput.text.clear()
+                }
+                cmdInput.setSelection(cmdInput.text.length)
+            }
+        }
 
         layout.addView(headerTitle)
         layout.addView(pathText)
@@ -130,8 +137,8 @@ class MainActivity : Activity() {
         layout.addView(historyPanel)
 		
         setContentView(layout)
-		historyPanel.addView(btnPrev)
-		historyPanel.addView(btnNext)
+        historyPanel.addView(btnPrev)
+        historyPanel.addView(btnNext)
 
         connectBtn.setOnClickListener { if (!connected) connect() else disconnect() }
 
@@ -147,13 +154,12 @@ class MainActivity : Activity() {
         }
     }
 
-	private fun handleCommand(cmd: String) {
+    private fun handleCommand(cmd: String) {
         if (cmd.isNotEmpty()) {
-            // Добавляем в историю, если такой команды там еще нет
             if (commandHistory.isEmpty() || commandHistory.last() != cmd) {
                 commandHistory.add(cmd)
             }
-            historyIndex = commandHistory.size // Сбрасываем индекс в конец
+            historyIndex = commandHistory.size
         }
         
         when (cmd.lowercase()) {
@@ -171,6 +177,11 @@ class MainActivity : Activity() {
                 writer = socket!!.getOutputStream().bufferedWriter()
                 reader = socket!!.getInputStream().bufferedReader()
                 connected = true
+
+                // --- СОХРАНЕНИЕ IP ПРИ УСПЕШНОМ ПОДКЛЮЧЕНИИ ---
+                val prefs = getSharedPreferences("RemoteCMD_Prefs", Context.MODE_PRIVATE)
+                prefs.edit().putString("last_ip", ip).apply()
+
                 handler.post {
                     connectBtn.text = "ОТКЛЮЧИТЬСЯ"
                     connectBtn.setBackgroundColor(Color.parseColor("#880000"))
