@@ -41,7 +41,7 @@ class MainActivity : Activity() {
         }
 
         val headerTitle = TextView(this).apply {
-            text = "REMOTE TERMINAL"
+            text = "Remote CMD"
             setTextColor(Color.WHITE)
             textSize = 18f
             typeface = Typeface.DEFAULT_BOLD
